@@ -1,0 +1,17 @@
+* TODO Week 02/07-06/07
+** DONE Let galsim choose postage stamp size (02-07-18)
+** DONE Stop averaging over g1, g2 (02-07-18)
+** DONE Convert to chi type manually
+ w/ last eq before sec 2.2 of Mandelbaum Great3
+** Get error on m
+Use bootstrap nlog^2(n)
+** Do weighted average over all SNR to find g hat, then find error on m
+Fix a noise level sigma_N, use flux values such that SNR is 5-200
+** DONE Make catalog, read from it
+Gal ID, Flux/magnitude, size, sersic n, intrinsic ellipticity
+** DONE Plotting stuff..
+** DONE Keep rotated galaxies together when bootstrapping
+** Use fits or ascii for saving instead of pickle
+** Output catalog with measured ellipticity, size
+** Use same seed each time for bootstrap
+** Implement better bootstrap algorithm
