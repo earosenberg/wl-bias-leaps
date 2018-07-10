@@ -261,3 +261,26 @@ def bootstrapM(shearSamples,shearList):
         mSamples.append(gparams[:,0])
     mSamples=np.stack(mSamples)
     return mSamples
+
+def dilate(obj, shear):
+    g = np.sqrt(shear[0]**2 + shear[1]**2)
+    dilation = 1.0 + 2.0*g
+    return obj.dilate(dilation)
+
+def cfGal(gal, psf, shearList):
+    '''
+    Parameters:
+    gal: A galsim object (not image) representing a galaxy convolved with some PSF
+    psf: A galsim object representing a psf
+    shearList: A list of shears by which to shear the galaxy
+    Returns:
+    A list of galaxy objects that have been deconvolved w/ PSF, sheared, and convolved w/ dilated PSF'''
+    inv_psf = galsim.Deconvolve(psf)
+    deconv_gal = galsim.Convolve(inv_psf, gal)
+    final_gals = []
+    for shear in shearList:
+        shear_gal = deconv_gal.shear(g1=0,g2=0)
+        dil_psf = dilate(psf, shear)
+        final_gal = galsim.Convolve(shear_gal, dil_psf)
+        final_gals.append(final_gal)
+    return final_gals
