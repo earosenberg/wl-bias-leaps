@@ -92,7 +92,9 @@ def intrinsic_shear(galaxy,shape_parameter_type,mag,ph):
 
 def drawGalaxies(shearedGals, noise_sigma, nopixel, sim_params, save_ims=False):
     '''
-    Returns array of shape (ngal, nrot, #shears, (e1corr, e2corr))
+    Returns obs: array of shape (ngal, nrot, #shears, (e1corr, e2corr))
+    shape_err: 1d array of shape measurement errors returned by galsim
+    error_message: 1D array of ints that are code for an error message
     shearedGals is an array of shape (#shears, ngals*nrot) giving the sheared galaxy objects
     noise_sigma is a float giving the sigma of the Gaussian noise. If it is negative no noise is applied.
     nopixel is a bool. If True "no_pixel" is the method used to draw images, else "auto"
@@ -157,12 +159,105 @@ def drawGalaxies(shearedGals, noise_sigma, nopixel, sim_params, save_ims=False):
     # cPickle.dump(obs,outfile2)
     # outfile2.close()
     if save_ims:
-        return obs, noisyGals
+        return obs, shape_err, error_message, np.stack(noisyGals)
     else:
-        return obs
+        return obs, shape_err, error_message
     #obs shape:
     #(ngal, nrot, #shears, 2)
     #Axis 1: Galaxy #
     #Axis 2: Rotated versions
     #Axis 3: Shear
     #Axis 4: shape measurement: [e1corr, e2corr] or [nan, nan] in case of failure
+    
+    
+def matchRotatedNans(obs):
+    '''If any of the rotations of a single galaxy are nan, make all rotations nan'''
+    tempObs = obs.transpose(0,2,1,3) #(ngal, shear, nrot, (e1, e2))
+    for i in range(tempObs.shape[0]):
+        for j in range(tempObs.shape[1]):
+                if np.any(np.isnan(tempObs[i,j])):
+                    for k in range(tempObs.shape[2]):
+                        tempObs[i,j,k] = [np.nan] * tempObs[i,j,k].size
+    obs = tempObs.transpose(0,2,1,3) 
+    return obs
+
+def nanav(array, weights, axis=None):
+    '''Take weighted average of an array, ignoring nan values
+       array: ndarray object. weights: array of same size, giving weights.
+       axis: int giving axis to average along
+       returns: array averaged along given axis, ignoring nans'''
+    ma = np.ma.MaskedArray(array, mask=np.isnan(array))
+    av = np.ma.average(ma, weights=weights, axis=axis)
+    if isinstance(av, np.ndarray):
+        if np.any(av.mask):
+            raise ValueError, 'Average should not contain np.nan'
+        else:
+            return av.data
+    else:
+        return av
+
+def findMeanShear(obs,weights):
+    '''obs: array of measured distortions, shape (Galaxy#, nrot, Shear, (e1,e2))
+       weights: array of weights
+       Returns estimate of mean shear, shape (Shear, (g1,g2))'''
+    distortionMean = nanav(obs,weights, axis=(0,1))
+    distSqMean = np.nanmean(obs[:,:,:,0]**2 + obs[:,:,:,1]**2)/2.
+    mean = distortionMean / (2 * (1-distSqMean)) #Formula for approximate shear
+    return mean
+
+#Keep rotated pairs together when bootstrapping
+
+def bootstrapShear(obs,weights,nBootstrap):    
+    '''obs,weights: as above. nBootstrap: int, number of times to resample
+       Returns array of shape (nBootstrap,shear,(g1,g2)) giving samples of mean shear'''
+    size=obs.shape[0]
+    shearSamples = []
+    for i in xrange(nBootstrap):
+        np.random.seed(seed=i) #seed=None to use a random seed
+        randNums = np.random.random(size)
+        ncounts, bin_edges = np.histogram(randNums, bins=size, range=(0,1))
+        ncounts = ncounts.reshape(len(ncounts),1,1,1)
+        for i in [1,2,3]:
+            ncounts = ncounts.repeat(weights.shape[i],axis=i)
+
+        newWeights = weights * ncounts
+        shearSample = findMeanShear(obs, newWeights)
+        shearSamples.append(shearSample)
+    shearSamples = np.stack(shearSamples)
+    return shearSamples
+
+def lin(x,m,b):
+    return m*x+b
+
+def fitline(shear,data,err):
+    fitparam, fiterr = curve_fit(lin,shear,data,p0=[1,0],sigma=err)
+    return fitparam
+
+def getFitParameters(shearList,fullRes):
+    '''
+    fullRes is an array of shape (measurements, shears, (mean, err))
+    shearList is a list of 2-tupes of true shear
+    '''
+    #Iterate over measurements
+    g1shear = [shear[0] for shear in shearList]
+    g2shear = [shear[1] for shear in shearList]
+    shear=(g1shear,g2shear)
+    fullParamArr=[]
+    for i,res in enumerate(fullRes[:2]):
+        fitParamArr = []
+
+        fitparams = fitline(shear[i],res[:,0],res[:,1]) 
+        fullParamArr.append(fitparams)
+    return np.array(fullParamArr) #Shape (2 (g1, g2), 2 (slope, intercept of line))
+
+def bootstrapM(shearSamples,shearList):
+    '''shearSamples as above. shearList is a list of 2-tuples of true shear
+       Return array of shape (nBootstrap, 2 (g1,g2))'''
+    mSamples=[]
+    sigma = np.ones_like(shearSamples)[0] #Use 1 for all errors (same as no error)
+    for sample in shearSamples:
+        sampleRes = np.stack([sample,sigma]).transpose(2,1,0)
+        gparams= getFitParameters(shearList,sampleRes)       
+        mSamples.append(gparams[:,0])
+    mSamples=np.stack(mSamples)
+    return mSamples
