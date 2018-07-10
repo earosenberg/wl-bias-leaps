@@ -121,7 +121,7 @@ def drawGalaxies(shearedGals, noise_sigma, nopixel, sim_params, save_ims=False):
         gal_ims = []
         for i,gal in enumerate(galRow):
             #Convolve w/ PSF and draw image
-            final = galsim.Convolve([gal, psf])
+            final = galsim.Convolve([psf, gal])
             if i==0:
                 image = final.drawImage(scale=pixel_scale, method=method)
             else:
@@ -278,9 +278,9 @@ def cfGal(gal, psf, shearList):
     inv_psf = galsim.Deconvolve(psf)
     deconv_gal = galsim.Convolve(inv_psf, gal)
     final_gals = []
+    dil_psf = dilate(psf, shear)
     for shear in shearList:
-        shear_gal = deconv_gal.shear(g1=0,g2=0)
-        dil_psf = dilate(psf, shear)
-        final_gal = galsim.Convolve(shear_gal, dil_psf)
+        shear_gal = deconv_gal.shear(g1=shear[0],g2=shear[1])
+        final_gal = galsim.Convolve(dil_psf, shear_gal)
         final_gals.append(final_gal)
     return final_gals
