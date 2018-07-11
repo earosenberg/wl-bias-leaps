@@ -2,7 +2,7 @@ import numpy as np
 import galsim
 from scipy.optimize import curve_fit
 import time
-from galsim.gsparams import GSParams
+#from galsim.gsparams import GSParams
 from galsim.hsm import HSMParams
 from scipy import fftpack
 from scipy import interpolate
@@ -40,6 +40,26 @@ def measureShape(noise_im, image_psf, disk_re, psf_sigma, pixel_scale):
                                            shear_est='REGAUSS')
         if results.correction_status==0:
             return [results.corrected_e1, results.corrected_e2, results.corrected_shape_err,0]
+        #if shape estimation unsuccessful
+        else:
+            if 'NaN' in results.error_message:
+                em = -11
+            elif 'adaptive' in results.error_message:
+                em = -9
+            elif 'min/max' in results.error_message:
+                em = -7
+            else:
+                print results.error_message
+                em = -999
+
+            return [np.nan, np.nan, np.nan,em]
+        
+def measureObsShape(noise_im, image_psf, disk_re, psf_sigma, pixel_scale):
+        results = galsim.hsm.EstimateShear(noise_im,image_psf,strict=False,\
+                                           guess_sig_gal=disk_re/pixel_scale, guess_sig_PSF=psf_sigma/pixel_scale,\
+                                           shear_est='REGAUSS')
+        if results.correction_status==0:
+            return [results.observed_shape.e1, results.observed_shape.e2, results.corrected_shape_err,0]
         #if shape estimation unsuccessful
         else:
             if 'NaN' in results.error_message:
@@ -278,8 +298,8 @@ def cfGal(gal, psf, shearList):
     inv_psf = galsim.Deconvolve(psf)
     deconv_gal = galsim.Convolve(inv_psf, gal)
     final_gals = []
-    dil_psf = dilate(psf, shear)
     for shear in shearList:
+        dil_psf = dilate(psf, shear)
         shear_gal = deconv_gal.shear(g1=shear[0],g2=shear[1])
         final_gal = galsim.Convolve(dil_psf, shear_gal)
         final_gals.append(final_gal)
