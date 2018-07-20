@@ -58,21 +58,22 @@ def measureObsShape(noise_im, image_psf, disk_re, psf_sigma, pixel_scale):
         results = galsim.hsm.EstimateShear(noise_im,image_psf,strict=False,\
                                            guess_sig_gal=disk_re/pixel_scale, guess_sig_PSF=psf_sigma/pixel_scale,\
                                            shear_est='REGAUSS')
-        if results.correction_status==0:
-            return [results.observed_shape.e1, results.observed_shape.e2, results.corrected_shape_err,0]
-        #if shape estimation unsuccessful
-        else:
-            if 'NaN' in results.error_message:
-                em = -11
-            elif 'adaptive' in results.error_message:
-                em = -9
-            elif 'min/max' in results.error_message:
-                em = -7
-            else:
-                print results.error_message
-                em = -999
+        return [results.observed_shape.e1, results.observed_shape.e2]
+#         if results.correction_status==0:
+#             return [results.observed_shape.e1, results.observed_shape.e2, results.corrected_shape_err,0]
+#         #if shape estimation unsuccessful
+#         else:
+#             if 'NaN' in results.error_message:
+#                 em = -11
+#             elif 'adaptive' in results.error_message:
+#                 em = -9
+#             elif 'min/max' in results.error_message:
+#                 em = -7
+#             else:
+#                 print results.error_message
+#                 em = -999
 
-            return [np.nan, np.nan, np.nan,em]
+#             return [np.nan, np.nan, np.nan,em]
     
 def addGaussianNoiseSNR(im,clean_im,snr):
     noise = galsim.GaussianNoise(sigma=1)
