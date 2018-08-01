@@ -7,16 +7,11 @@ import matplotlib.cm as cm
 import shape_measurement as sm
 import cPickle
 
-def rotGal(gal,targetTheta):
-    '''Rotate galaxy so major axis is rotated targetTheta counterclockwise relative to x axis'''
+def rotGal(gal,intrinsicTheta, targetTheta):
+    '''Rotate galaxy so major axis is rotated targetTheta clockwise relative to x axis'''
     if np.abs(targetTheta) > 2*np.pi:
         print 'warning: targetTheta > 2pi -- recall that targetTheta should be given in radians'
-    jac=gal.getJac()
-    k = (jac[0]+jac[3])/2
-    g2 = jac[1]/k
-    g1 = 1-(jac[3]/k)
-    theta = np.arctan2(g2,g1) / 2.
-    angle = (-targetTheta - theta)*galsim.radians
+    angle = (targetTheta - intrinsicTheta)*galsim.radians
     return gal.rotate(angle)
 
 def circularize(gal):
@@ -41,7 +36,7 @@ def removeBulge(gal):
 gsparams = galsim.GSParams(kvalue_accuracy=1.e-5,maximum_fft_size=2048*10,maxk_threshold=9.e-4)
 
 pixel_scale = 0.1 #as/px
-lamda = 550 #nm
+lamda = 800 #nm
 diameter = 1.2 #m
 psf_oversample = 5.
 gal_oversample = 2.
@@ -49,10 +44,13 @@ ngal = 10000
 
 ##options##
 circ = False
-bulgeHandling = 2 #0: Keep Bulge+Disk. 1: Replace with just disk. 2: Remove entire galaxy
+bulgeHandling = 1 #0: Keep Bulge+Disk. 1: Replace with just disk. 2: Remove entire galaxy
 rotGals = True
 rotAngleDeg = 0 #Degrees
 rotAngleRad = np.radians(rotAngleDeg)
+
+if (rotGals or circ) and bulgeHandling==0:
+    raise Exception("Cannot rotate or circularize bulge+disk profiles")
 
 ##Make psf##
 airy = galsim.Airy(lam=lamda, diam=diameter, scale_unit=galsim.arcsec, obscuration=0.3, gsparams=gsparams)
@@ -60,37 +58,33 @@ pixel = galsim.Pixel(pixel_scale,gsparams=gsparams)
 psf = galsim.Convolve(airy, pixel)
 
 given_psf = psf.drawImage(scale=pixel_scale/psf_oversample,method='no_pixel') #Draw oversampled psf image
+
 psfii = galsim.InterpolatedImage(given_psf, gsparams=gsparams)
+
 
 #Load galaxy catalog and select galaxies
 cc = galsim.COSMOSCatalog(dir='/disks/shear15/KiDS/ImSim/pipeline/data/COSMOS_25.2_training_sample/',use_real=False)
-hlr, sn, q = [np.array([pc[4][i] for pc in cc.param_cat]) for i in range(1,4)]
+sersicfit = cc.param_cat['sersicfit']
+hlr, sn, q, phi = [sersicfit[:,i] for i in (1,2,3,7)]
+paramcatIndeces = np.where(np.logical_and(hlr*np.sqrt(q)>2.5, sn>=0.5))[0][:ngal] #Large galaxies, reasonable sersic n
 
-small100I = np.where(np.logical_and(hlr*np.sqrt(q)>2.5, sn>=0.5))[0][:ngal] #Large galaxies, reasonable sersic n
-gals = cc.makeGalaxy(small100I, chromatic=False, gsparams=gsparams)
+gals = makeGalaxy(cc, paramcatIndeces, chromatic=False, gsparams=gsparams,trunc_factor=0) #Note that all bulge+disk profiles are drawn as sersic. bulgeHandling saved in miscCode
 
-mask=np.ones_like(gals)
-if bulgeHandling == 1:
-    gals = [removeBulge(gal) for gal in gals] #Change bulge+disk to just disk
+intrinsicAngles = phi[paramcatIndeces]
+phiList=intrinsicAngles
 
-elif bulgeHandling == 2:
-    newgals=[]  
-    for i,gal in enumerate(gals):
-        if type(gal) != galsim.compound.Sum:
-            newgals.append(gal)
-        else:
-            mask[i] = 0
-    gals = newgals
-#    gals = [gal for gal in gals if type(gal) != galsim.compound.Sum] #Remove bulge+disk profiles
-        
 if circ:
     gals = [circularizeAll(gal) for gal in gals]
     q = np.ones_like(sn)
+
 if rotGals:
-    gals = [rotGal(gal,rotAngleRad) for gal in gals]
+    gals = [rotGal(gal, intrinsicAngle, rotAngleRad) for gal, intrinsicAngle in zip(gals, intrinsicAngles)]
+    phiList = np.ones_like(intrinsicAngles) * rotAngleRad
+
 ii=0
 print len(gals)
 sde1,sde2=[],[]
+hlr1,sn1 = [],[]
 for gal in gals:
     ii+=1
     if ii%50==0: print ii
@@ -126,19 +120,18 @@ for gal in gals:
     sde1.append(np.abs(rec_shape_e1-orig_shape_e1))
     sde2.append(np.abs(rec_shape_e2-orig_shape_e2))
 
-hlr1,sn1,q1 = hlr[small100I], sn[small100I], q[small100I]
-mask = mask==1
-res = [sde1,sde2, hlr1[mask], sn1[mask], q1[mask]]
+    orig_gal = gal.original
+    hlr1.append(orig_gal.half_light_radius); sn1.append(orig_gal.n)
+q1 = q[paramcatIndeces]
+
+res = [sde1,sde2, hlr1, sn1, q1, ident, phiList, paramcatIndeces]
 basename = '/home/rosenberg/Documents/wl-bias-leaps-top/shear_bias_outputs/measErrs'
 if circ:
     basename = basename + '_circ'
-if bulgeHandling==1:
-    basename = basename + '_diskonly'
-if bulgeHandling==2:
-    basename = basename + '_nobulgedisk'
+basename = basename + '_diskonly'
 if rotGals:
     basename = basename+'_rot'+str(rotAngleDeg)+'deg'
-name = basename + '.pkl'
+name = basename + '_%dgals.pkl' % ngal
 fil=open(name,'wb')
 cPickle.dump(res,fil)
 fil.close()
