@@ -284,8 +284,7 @@ def bootstrapM(shearSamples,shearList):
     return mSamples
 
 def dilate(obj, shear):
-    g = np.sqrt(shear[0]**2 + shear[1]**2)
-    dilation = 1.0 + 2.0*g
+    dilation = 1.0 + 2.0*shear.g
     return obj.dilate(dilation)
 
 def cfGal(gal, psf, shearList):
@@ -301,7 +300,82 @@ def cfGal(gal, psf, shearList):
     final_gals = []
     for shear in shearList:
         dil_psf = dilate(psf, shear)
-        shear_gal = deconv_gal.shear(g1=shear[0],g2=shear[1])
+        shear_gal = deconv_gal.shear(g1=shear.g1,g2=shear.g2)
         final_gal = galsim.Convolve(dil_psf, shear_gal)
         final_gals.append(final_gal)
     return final_gals
+
+def makeGalaxy(cc, gal_indices, chromatic=False, gsparams=None, trunc_factor=0.):
+    import scipy, scipy.special
+    galaxies = [ ]
+    sersicfit = cc.param_cat['sersicfit']
+    for gal_id in gal_indices:
+        gal_n = sersicfit[gal_id,2]
+        gal_q = sersicfit[gal_id,3]
+        gal_phi = sersicfit[gal_id,7]
+        gal_hlr = sersicfit[gal_id,1]*np.sqrt(gal_q)*0.03 ## in arcsec
+        b_n = 1.992*gal_n-0.3271
+        gal_flux = 2*np.pi*gal_n*scipy.special.gamma(2*gal_n)*np.exp(b_n)*gal_q*(sersicfit[gal_id,1]**2)*(sersicfit[gal_id,0])/(b_n**(2.*gal_n))
+        #print gal_n, gal_hlr, gal_flux, gal_q, gal_phi
+        gal = galsim.Sersic(n=gal_n,half_light_radius=gal_hlr, flux=gal_flux, trunc=trunc_factor*gal_hlr, gsparams=gsparams).shear(q=gal_q,beta=gal_phi*galsim.radians)
+        galaxies.append(gal)
+    return galaxies
+
+
+def rotGal(gal,intrinsicTheta, targetTheta):
+    '''Rotate galaxy so major axis is rotated targetTheta clockwise relative to x axis'''
+    if np.abs(targetTheta) > 2*np.pi:
+        print 'warning: targetTheta > 2pi -- recall that targetTheta should be given in radians'
+    angle = (targetTheta - intrinsicTheta)*galsim.radians
+    return gal.rotate(angle)
+
+def measureShapeBasic(gal, epsf, psfIm, ss, *args):
+    '''gal: galsim object representing the galaxy profile
+       epsf: galsim object representing the effective psf profile (w/ pixel response)
+       psfIm: galsim Image of the epsf, *sampled at galaxy rate* (ss)
+       ss: float, sampling scale of the galaxy (pixel_scale/gal_oversample)
+       Convolves gal+epsf profiles, measures shape w/ regaussianization, returns corrected (e1, e2)'''
+    fin = galsim.Convolve(gal, epsf)
+    galIm = fin.drawImage(scale=ss, method='no_pixel')
+    #plt.imshow(galIm.array);plt.colorbar();x1,x2=45,75;plt.xlim(x1,x2);plt.ylim(x1,x2);plt.show()
+    warningMessage = 'Warning: Shape measurement likely wrong, pixel scales differ'
+    if galIm.scale != psfIm.scale: print warningMessage
+    shape = galsim.hsm.EstimateShear(galIm, psfIm, strict=False)
+    if shape.correction_status != 0: 
+        return np.nan, np.nan
+    else:
+        return shape.corrected_e1, shape.corrected_e2
+    
+def measureShapeReconv(gal, epsf, psf_galsample, galscale, psfii, gsparams, interpolant='lanczos100'):
+    '''First four arguments correspond to those of measureShapeBasic
+       psfii: interpolated image of the oversampled psf
+       Convolve gal+epsf profiles, create interpolated image, de/reconvolve by psfii, measure shape
+       Returns corrected (e1, e2) of reconvolved image'''
+    fin = galsim.Convolve(gal, epsf)
+    given_im = fin.drawImage(scale=galscale, method='no_pixel')
+    gal_interp = galsim.InterpolatedImage(given_im, gsparams=gsparams, x_interpolant=interpolant)
+    inv_psf = galsim.Deconvolve(psfii)
+    dec = galsim.Convolve(gal_interp, inv_psf)
+    return measureShapeBasic(dec, psfii, psf_galsample, galscale)
+
+def galShiftErrs(gal, epsf, nx, ss, measureShape=measureShapeBasic, psfii=None, interpolant = 'lanczos100', gsparams=galsim.GSParams(kvalue_accuracy=1.e-5,maximum_fft_size=2048*10,maxk_threshold=1.e-5)):
+    '''gal, epsf: galsim objects representing galaxy / effective psf profiles
+       nx: int, number of steps with which to shift galaxy eg nx=5 shifts by 0, 1/8=1/(2*(nx-1)), 2/8, 3/8, 4/8
+       ss: galaxy sampling rate; galaxies will be shifted up to (ss/2, ss/2) in each dimension
+       measureShape: function that takes gal, epsf, psfIm, ss, possibly more args, returns (e1, e2)
+       psfii: Optional interpolated image of psf, for measureShapeReconv
+       Return arrays of e1, e2 measured for each image of a galaxy shifted in an nx x nx grid between (0,0), (ss/2, ss/2)
+       inclusive. Psf is not shifted.'''
+    d1shifts = np.linspace(0,ss/2, nx)
+    aa, bb = np.meshgrid(d1shifts, d1shifts)
+    d2shifts = zip(aa.flatten(), bb.flatten())
+    psfIm = epsf.drawImage(scale=ss, method='no_pixel')
+
+    e1arr, e2arr = [],[]
+    for shift in d2shifts:
+        galshift = gal.shift(shift)
+        e1, e2 = measureShape(galshift, epsf, psfIm, ss, psfii, gsparams, interpolant)
+        e1arr.append(e1); e2arr.append(e2)
+    #print 'Num failures: %d / %d' % (np.sum(np.isnan(e1arr)), len(e1arr))
+    return e1arr, e2arr
+    #return np.nanmean(e1arr), np.nanmean(e2arr), np.nanstd(e1arr), np.nanstd(e2arr)
